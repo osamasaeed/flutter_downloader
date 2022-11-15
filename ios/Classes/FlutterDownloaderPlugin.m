@@ -29,6 +29,8 @@
 #define ERROR_NOT_INITIALIZED [FlutterError errorWithCode:@"not_initialized" message:@"initialize() must called first" details:nil]
 #define ERROR_INVALID_TASK_ID [FlutterError errorWithCode:@"invalid_task_id" message:@"not found task corresponding to given task id" details:nil]
 
+#define STEP_UPDATE 1
+
 @interface FlutterDownloaderPlugin()<NSURLSessionTaskDelegate, NSURLSessionDownloadDelegate, UIDocumentInteractionControllerDelegate>
 {
     FlutterEngine *_headlessRunner;
@@ -41,7 +43,6 @@
     NSString *_allFilesDownloadedMsg;
     NSMutableArray *_eventQueue;
     int64_t _callbackHandle;
-    int _step;
 }
 
 @property(nonatomic, strong) dispatch_queue_t databaseQueue;
@@ -383,7 +384,7 @@ static BOOL debug = YES;
         return @"";
     }
     return revert
-    ? [origin stringByRemovingPercentEncoding]
+    ? [origin stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding]
     : [origin stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLQueryAllowedCharacterSet];
 }
 
@@ -540,14 +541,8 @@ static BOOL debug = YES;
         NSString *url = [record objectAtIndex:[_dbManager.arrColumnNames indexOfObject:@"url"]];
         NSString *filename = [record objectAtIndex:[_dbManager.arrColumnNames indexOfObject:@"file_name"]];
         NSString *savedDir = [self absoluteSavedDirPath:[record objectAtIndex:[_dbManager.arrColumnNames indexOfObject:@"saved_dir"]]];
-        NSString *headers = @"";
-        // in certain cases, headers column might not be available and will cause NSRangeException
-        @try {
-            NSString *rawHeaders = [record objectAtIndex:[_dbManager.arrColumnNames indexOfObject:@"headers"]];
-            headers = [self escape:rawHeaders revert:true];
-        } @catch(NSException *ex) {
-            NSLog(@"task headers not found: %@", ex);
-        }
+        NSString *headers = [record objectAtIndex:[_dbManager.arrColumnNames indexOfObject:@"headers"]];
+        headers = [self escape:headers revert:true];
         int resumable = [[record objectAtIndex:[_dbManager.arrColumnNames indexOfObject:@"resumable"]] intValue];
         int showNotification = [[record objectAtIndex:[_dbManager.arrColumnNames indexOfObject:@"show_notification"]] intValue];
         int openFileFromNotification = [[record objectAtIndex:[_dbManager.arrColumnNames indexOfObject:@"open_file_from_notification"]] intValue];
@@ -585,7 +580,6 @@ static BOOL debug = YES;
 - (void)registerCallbackMethodCall:(FlutterMethodCall*)call result:(FlutterResult)result {
     NSArray *arguments = call.arguments;
     _callbackHandle = [arguments[0] longLongValue];
-    _step = [arguments[1] intValue];
     result([NSNull null]);
 }
 
@@ -900,7 +894,7 @@ static BOOL debug = YES;
         NSString *taskId = [self identifierForTask:downloadTask];
         int progress = round(totalBytesWritten * 100 / (double)totalBytesExpectedToWrite);
         NSNumber *lastProgress = _runningTaskById[taskId][KEY_PROGRESS];
-        if (([lastProgress intValue] == 0 || (progress > ([lastProgress intValue] + _step)) || progress == 100) && progress != [lastProgress intValue]) {
+        if (([lastProgress intValue] == 0 || (progress > [lastProgress intValue] + STEP_UPDATE) || progress == 100) && progress != [lastProgress intValue]) {
             [self sendUpdateProgressForTaskId:taskId inStatus:@(STATUS_RUNNING) andProgress:@(progress)];
             __typeof__(self) __weak weakSelf = self;
             [self executeInDatabaseQueueForTask:^{
